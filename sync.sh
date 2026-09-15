@@ -88,6 +88,26 @@ fi
 [ -f "${SOURCE_DIR}/preset.yml" ] || die "源目录里没有 preset.yml"
 [ -d "$DSH_HOME_DIR" ] || die "找不到 DSH 主目录 ${DSH_HOME_DIR}（是不是 DSH_HOME 设错了？）"
 
+# A DSH home that is NOT the one the running DSH uses accepts the files and
+# then does nothing visible: the service keeps reading its own home and the
+# operator sees a successful install with no effect. On a deployment whose DSH
+# runs as a service account this is the single most likely silent failure, so
+# it is checked rather than assumed.
+if [ ! -d "${DSH_HOME_DIR}/profiles" ] && [ ! -f "${DSH_HOME_DIR}/settings.yaml" ]; then
+  say "警告: ${DSH_HOME_DIR} 看起来不像一个 DSH 主目录。"
+  say "      （既没有 profiles/ 也没有 settings.yaml）"
+  say "      如果 DSH 是以别的用户运行的，这样装完不会有任何效果 —— 请用运行 DSH 的"
+  say "      那个用户执行本脚本，或显式指定 DSH_HOME=/path/to/that/users/.dsh"
+  say ""
+fi
+
+if [ ! -w "$DSH_HOME_DIR" ]; then
+  die "${DSH_HOME_DIR} 不可写。请用运行 DSH 的那个用户执行，或修正权限。"
+fi
+
+say "分发包版本: $(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo '(缺少 VERSION 文件)')"
+say ""
+
 # ── integrity: verify every file against the shipped checksums ──────────────
 if [ -f "${SCRIPT_DIR}/checksums.txt" ]; then
   say "校验文件完整性…"

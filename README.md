@@ -32,6 +32,18 @@ cd paper-preset && git pull && ./sync.sh
 
 `DSH_HOME` 默认 `~/.dsh`，装在别的路径就 `DSH_HOME=/opt/dsh ./sync.sh`。
 
+### ⚠️ 必须用「运行 DSH 的那个用户」执行
+
+preset 装在 `$DSH_HOME/.agent-presets/`。如果 DSH 是以服务用户（例如 `dsh`）跑的，而你用 root 或自己的账号执行 `sync.sh`，文件会装进**错误的家目录**——脚本成功退出，DSH 那边却毫无变化。这是这套流程最可能的静默失败。
+
+```bash
+sudo -u dsh ./sync.sh                       # 用运行 DSH 的用户
+# 或者显式指定
+DSH_HOME=/home/dsh/.dsh ./sync.sh
+```
+
+脚本会检查：`$DSH_HOME` 既没有 `profiles/` 也没有 `settings.yaml` 时给出警告，不可写时直接报错退出。
+
 ### 生效方式（重要）
 
 | 你改了什么 | 怎么生效 |
