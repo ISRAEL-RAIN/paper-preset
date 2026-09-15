@@ -34,7 +34,14 @@ cd paper-preset && git pull && ./sync.sh
 
 ### 生效方式（重要）
 
-**新开一个会话就生效，不需要重启 DSH。** 已经打开的会话继续用旧版本，不会被中断。
+| 你改了什么 | 怎么生效 |
+|---|---|
+| 只改了 `agent.cordis.yml`（行、config、persona 文案） | **新开一个会话即可** |
+| 改了任何 `.mjs` 插件代码 | **必须重启 DSH 进程** |
+| `preset.yml`（显示名、描述） | 新开一个会话即可 |
+| 不确定 | 重启最稳 |
+
+已经打开的会话继续用旧版本，不会被中断。`sync.sh` 会自动比对这次改动了哪类文件并给出对应提示。
 
 ---
 
@@ -62,11 +69,11 @@ git add -A && git commit -m "paper preset 0.2.0" && git tag paper-v0.2.0 && git 
 
 ---
 
-## 三、两个必须知道的技术事实
+## 三、更新是怎么生效的（实测结论）
 
-这两条是读 DSH `dsh-agent-presets` 源码确认的，不是猜的。
+下面每一条都在真实运行的 DSH 上量过，不是推测。
 
-### 1. DSH 靠「composition 文件的 mtime + size」判断 preset 是否过期
+### 1. DSH 靠 composition 文件的 mtime + size 判断 preset 是否过期
 
 ```js
 async function compositionStamp(path) {
@@ -75,13 +82,40 @@ async function compositionStamp(path) {
 }
 ```
 
-也就是说：
+戳变了就重建一份 standing mount，**新会话**拿到新的；已经挂载的旧会话继续跑旧的，进程内不回收（所以更新不会打断在用的客户）。`sync.sh` 安装后会 `touch agent.cordis.yml` 来重打这个戳。
 
-- **只换 `.mjs` 或 `skills/` 里的文件，DSH 不会察觉**，新会话仍然跑旧代码，更新静默失效。
-- 换完必须 **`touch agent.cordis.yml`**，`sync.sh` 已经替你做了，**别删那一步**。
-- 新会话拿到新版本；**已挂载的旧会话保持旧版本**，进程内不会被回收（所以更新不会打断在用的客户）。
+### 2. 但重打戳只对 `agent.cordis.yml` 有效，对 `.mjs` 无效
 
-### 2. `.mjs` 在 DSH host 进程里执行
+加载器导入相对路径的行，用的是**裸 `import()`，没有破缓存参数**：
+
+```js
+else if (name.startsWith(".")) return await import(
+  new URL(name, this.ctx.baseUrl).href      // file:///.../paper-refs.mjs —— 无 query
+)
+```
+
+Node 的 ES 模块按解析后的 URL **缓存到进程结束**。所以重新挂载时 `apply` 会再跑一次，但用的还是**缓存里那个旧模块**——工具实现、提示词、命令处理函数全是旧的。
+
+**实测对照**（在运行中的 DSH 上做的）：
+
+| 操作 | 结果 |
+|---|---|
+| 放入一个**全新的** `.mjs` 并挂载 | ✅ 模块被求值 |
+| 把同一个 `.mjs` 改成新内容 + touch composition + 重新挂载 | ❌ **仍是旧内容**，模块未被重新求值 |
+
+### 3. 所以更新规则是
+
+| 改动 | 免重启生效？ | 原因 |
+|---|---|---|
+| `agent.cordis.yml`：行、config、persona 文案 | ✅ 新会话生效 | composition 文件每次挂载重新读盘 |
+| **新增**一个从未加载过的 `.mjs` + 对应新行 | ✅ 新会话生效 | 新 URL，首次 import |
+| **修改**已有 `.mjs` 的内容 | ❌ **必须重启 DSH** | ESM 按 URL 缓存 |
+| `preset.yml`：显示名、描述 | ✅ 新会话生效 | 发现时读盘 |
+| `skills/*/SKILL.md` | ⚠️ 未实测 | 保守按「要重启」处理 |
+
+**一句话**：改了插件代码就重启。`sync.sh` 会自动判断并告诉你是哪种情况。
+
+### 4. 安全：`.mjs` 在 DSH host 进程里执行
 
 preset 里的 `.mjs` 是**真实代码**，跑在 DSH 主进程里，权限等同于启动 DSH 的那个用户。
 

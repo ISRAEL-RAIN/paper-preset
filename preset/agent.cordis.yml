@@ -30,6 +30,8 @@
 # when a task calls for them; it does not impose a pipeline or a directory
 # layout on the user's work.
 
+# (distribution marker: v0.1.1)
+
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The preset's own persona, shadowing the deployment default for this agent.

@@ -11,12 +11,25 @@
 # roll back. Let a human or a timer run it; let the agent at most run it and
 # report the output.
 #
-# THE ONE NON-OBVIOUS STEP. DSH decides whether a mounted preset is stale by
-# stamping the composition FILE — mtimeMs + size of `agent.cordis.yml` — not
-# the directory. Replacing only the .mjs files leaves that stamp untouched, so
-# the running DSH keeps serving the old generation to every new session and the
-# update silently does nothing. Touching the composition file is what makes the
-# new code take effect. Do not remove that step.
+# TWO NON-OBVIOUS FACTS ABOUT HOW AN UPDATE LANDS. Both were verified against a
+# running DSH (dsh-agent-presets + cordis-plugin-loader), not assumed.
+#
+# 1. DSH decides whether a mounted preset is stale by stamping the composition
+#    FILE — mtimeMs + size of `agent.cordis.yml` — not the directory. So after
+#    copying files in, the composition must be re-stamped or DSH keeps serving
+#    the mount it already has. That is what the `touch` below is for.
+#
+# 2. THAT TOUCH IS NOT ENOUGH FOR PLUGIN CODE. The loader imports a relative
+#    row with a plain `import(new URL(name, baseUrl).href)` — no cache-busting
+#    query. Node caches an ES module by resolved URL for the lifetime of the
+#    process, so a re-mount of a CHANGED .mjs file re-runs `apply` from the
+#    CACHED module: tools, prompt text and command handlers stay on the old
+#    code. Only a process restart clears it. Measured directly: a brand-new
+#    .mjs is evaluated on mount, the same .mjs edited and re-mounted is not.
+#
+#    Practical rule: changes to agent.cordis.yml (rows, configs, persona text)
+#    land on the next session; ANY change to an .mjs file needs a restart.
+#    This script checks which kind of change it just installed and says so.
 
 set -euo pipefail
 
@@ -95,17 +108,37 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 # ── backup, then swap ───────────────────────────────────────────────────────
+# Detect whether any PLUGIN CODE changed before we overwrite the old copy: that
+# decides which advice to print at the end (see CODE_CHANGED below).
+CODE_CHANGED=0
 if [ -d "$TARGET_DIR" ]; then
+  for source_file in "${SOURCE_DIR}"/*.mjs; do
+    [ -e "$source_file" ] || continue
+    name="$(basename "$source_file")"
+    if ! cmp -s "$source_file" "${TARGET_DIR}/${name}"; then
+      CODE_CHANGED=1
+      break
+    fi
+  done
+
   backup="${BACKUP_ROOT}/${PRESET_ID}.bak.${STAMP}"
   cp -r "$TARGET_DIR" "$backup"
   say "已备份旧版本 -> ${backup}"
+else
+  # A first install has no old copy to compare against, but DSH has never
+  # imported these modules either, so a fresh mount loads them normally.
+  CODE_CHANGED=0
 fi
 
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 cp -r "${SOURCE_DIR}/." "$TARGET_DIR/"
 
-# The step that actually makes DSH notice. See the header comment.
+# Re-stamps the composition file so DSH rebuilds the preset's standing mount
+# instead of serving the one it already has. This IS enough for changes to
+# agent.cordis.yml — but NOT for changes to .mjs files, because the loader
+# imports them with a plain `import(url)` and Node caches that module for the
+# lifetime of the process. See the header comment.
 touch "${TARGET_DIR}/agent.cordis.yml"
 
 # ── verify what landed ──────────────────────────────────────────────────────
@@ -118,5 +151,14 @@ say ""
 say "完成。安装内容:"
 ( cd "$TARGET_DIR" && find . -type f | sort | sed 's/^/  /' )
 say ""
-say "生效方式: 新开一个会话即可（已挂载的旧会话保持原样，不会被中断）。"
-say "若新会话报 preset 挂载失败: ./sync.sh --rollback"
+if [ "$CODE_CHANGED" = 1 ]; then
+  say "⚠️  本次更新改动了 .mjs 插件代码。"
+  say "    DSH 用普通 import() 加载这些文件，Node 会按 URL 把模块缓存到进程结束，"
+  say "    因此只 touch composition 是不够的 —— 必须重启 DSH 进程，否则新会话仍跑旧代码。"
+  say ""
+  say "    重启方式取决于你的部署（systemctl restart <服务名> / 重启容器 / 重跑 dsh web）。"
+else
+  say "本次未改动 .mjs 插件代码，新开一个会话即可生效（已挂载的旧会话保持原样）。"
+fi
+say ""
+say "装完若新会话报 preset 挂载失败: ./sync.sh --rollback"
