@@ -7,9 +7,13 @@
 # the deployment. "Ask the agent to fetch the latest from the internet and
 # install it" therefore hands arbitrary remote code that privilege level. This
 # script keeps the trust decision in one auditable place: it verifies the
-# checksums that ship alongside the code, installs deterministically, and can
-# roll back. Let a human or a timer run it; let the agent at most run it and
-# report the output.
+# checksums that ship alongside the code, refuses a silent downgrade, installs
+# deterministically, and can roll back. Let a human or a timer run it; let the
+# agent at most run it and report the output.
+#
+# WHAT IT DOES NOT DO. Nothing here is automatic. `git pull` is yours to run,
+# this script is yours to run, and the restart below is yours to schedule.
+# There is no daemon, no polling, and no phone-home.
 #
 # TWO NON-OBVIOUS FACTS ABOUT HOW AN UPDATE LANDS. Both were verified against a
 # running DSH (dsh-agent-presets + cordis-plugin-loader), not assumed.
@@ -29,7 +33,8 @@
 #
 #    Practical rule: changes to agent.cordis.yml (rows, configs, persona text)
 #    land on the next session; ANY change to an .mjs file needs a restart.
-#    This script checks which kind of change it just installed and says so.
+#    This script compares the incoming .mjs files against the installed ones
+#    and tells you which of the two you just did.
 
 set -euo pipefail
 
@@ -39,20 +44,27 @@ SOURCE_DIR="${SCRIPT_DIR}/preset"
 DSH_HOME_DIR="${DSH_HOME:-${HOME}/.dsh}"
 TARGET_DIR="${DSH_HOME_DIR}/.agent-presets/${PRESET_ID}"
 BACKUP_ROOT="${DSH_HOME_DIR}/.agent-presets"
+INSTALLED_FILE="${TARGET_DIR}/INSTALLED.json"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 DRY_RUN=0
 ROLLBACK=0
+STATUS=0
+FORCE=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --rollback) ROLLBACK=1 ;;
+    --status) STATUS=1 ;;
+    --force) FORCE=1 ;;
     -h|--help)
       cat <<'USAGE'
 用法:
   ./sync.sh              安装或更新 paper preset
-  ./sync.sh --dry-run    只检查，不写任何东西
+  ./sync.sh --dry-run    只检查并预告，不写任何东西
+  ./sync.sh --status     只报告当前装了什么版本，不写任何东西
   ./sync.sh --rollback   回滚到最近一次备份
+  ./sync.sh --force      忽略「已是最新」或「这是降级」的拦截，强制安装
 环境变量:
   DSH_HOME               DSH 主目录（默认 ~/.dsh）
 USAGE
@@ -68,6 +80,49 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "缺少命令 $1"; }
 require_cmd sha256sum
 require_cmd touch
 require_cmd cp
+require_cmd sed
+require_cmd sort
+
+# ── version helpers ─────────────────────────────────────────────────────────
+
+# The version recorded by the last install, or nothing when never installed.
+read_installed_version() {
+  [ -f "$INSTALLED_FILE" ] || return 1
+  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$INSTALLED_FILE" | head -n1
+}
+
+# Is $1 >= $2 under version sort? Used to tell an upgrade from a downgrade.
+version_ge() {
+  [ "$1" = "$2" ] && return 0
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | tail -n1)" = "$1" ]
+}
+
+PACKAGE_VERSION="$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo '')"
+
+# ── status path (read-only) ─────────────────────────────────────────────────
+if [ "$STATUS" = 1 ]; then
+  say "分发包版本: ${PACKAGE_VERSION:-(缺少 VERSION 文件)}"
+  say "DSH 主目录: ${DSH_HOME_DIR}"
+  say "安装位置:   ${TARGET_DIR}"
+  installed="$(read_installed_version || true)"
+  if [ -z "$installed" ]; then
+    if [ -d "$TARGET_DIR" ]; then
+      say "当前状态:   已安装，但没有 INSTALLED.json（v0.1.2 或更早装的）"
+    else
+      say "当前状态:   未安装"
+    fi
+  else
+    say "当前状态:   已安装 v${installed}"
+    sed -n 's/.*"installedAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/安装时间:   \1/p' "$INSTALLED_FILE"
+    sed -n 's/.*"commit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/对应提交:   \1/p' "$INSTALLED_FILE"
+    if [ -n "$PACKAGE_VERSION" ] && version_ge "$PACKAGE_VERSION" "$installed" && [ "$PACKAGE_VERSION" != "$installed" ]; then
+      say "可更新到:   v${PACKAGE_VERSION}"
+    elif [ "$PACKAGE_VERSION" = "$installed" ]; then
+      say "已是最新。"
+    fi
+  fi
+  exit 0
+fi
 
 # ── rollback path ───────────────────────────────────────────────────────────
 if [ "$ROLLBACK" = 1 ]; then
@@ -86,6 +141,7 @@ fi
 [ -d "$SOURCE_DIR" ] || die "找不到源目录 ${SOURCE_DIR}"
 [ -f "${SOURCE_DIR}/agent.cordis.yml" ] || die "源目录里没有 agent.cordis.yml"
 [ -f "${SOURCE_DIR}/preset.yml" ] || die "源目录里没有 preset.yml"
+[ -n "$PACKAGE_VERSION" ] || die "缺少 VERSION 文件，无法判断这是升级还是降级"
 [ -d "$DSH_HOME_DIR" ] || die "找不到 DSH 主目录 ${DSH_HOME_DIR}（是不是 DSH_HOME 设错了？）"
 
 # A DSH home that is NOT the one the running DSH uses accepts the files and
@@ -105,7 +161,8 @@ if [ ! -w "$DSH_HOME_DIR" ]; then
   die "${DSH_HOME_DIR} 不可写。请用运行 DSH 的那个用户执行，或修正权限。"
 fi
 
-say "分发包版本: $(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo '(缺少 VERSION 文件)')"
+say "分发包版本: ${PACKAGE_VERSION}"
+say "DSH 主目录: ${DSH_HOME_DIR}"
 say ""
 
 # ── integrity: verify every file against the shipped checksums ──────────────
@@ -118,12 +175,39 @@ else
   say "警告：没有 checksums.txt，跳过完整性校验。"
 fi
 
-say ""
-say "将安装: ${SOURCE_DIR}"
-say "  到:   ${TARGET_DIR}"
+# ── version gate ────────────────────────────────────────────────────────────
+# Read BEFORE anything is removed: this is the only copy of what is installed.
+INSTALLED_VERSION="$(read_installed_version || true)"
+if [ -n "$INSTALLED_VERSION" ]; then
+  say "当前已装:   v${INSTALLED_VERSION}"
+  if [ "$INSTALLED_VERSION" = "$PACKAGE_VERSION" ]; then
+    if [ "$FORCE" = 1 ]; then
+      say "版本相同（v${PACKAGE_VERSION}），--force 已指定，继续重装。"
+    else
+      say ""
+      say "已经是 v${PACKAGE_VERSION}，无需更新。"
+      say "确实要重装同一版本，请显式指定: ./sync.sh --force"
+      exit 0
+    fi
+  elif ! version_ge "$PACKAGE_VERSION" "$INSTALLED_VERSION"; then
+    if [ "$FORCE" = 1 ]; then
+      say "⚠️  这是降级：v${INSTALLED_VERSION} → v${PACKAGE_VERSION}，--force 已指定，继续。"
+    else
+      say ""
+      die "这是降级：当前 v${INSTALLED_VERSION}，而这个包是 v${PACKAGE_VERSION}。
+     通常意味着仓库被切到了旧提交、旧分支，或被人 force-push 回了旧状态。
+     如果确实要降级，请显式指定: ./sync.sh --force"
+    fi
+  else
+    say "将更新为:   v${INSTALLED_VERSION} → v${PACKAGE_VERSION}"
+  fi
+else
+  say "当前已装:   无（首次安装）"
+fi
 
+say ""
 if [ "$DRY_RUN" = 1 ]; then
-  say "[dry-run] 不会真的写入。"
+  say "[dry-run] 不会真的写入。上面就是将要发生的全部动作。"
   exit 0
 fi
 
@@ -144,10 +228,6 @@ if [ -d "$TARGET_DIR" ]; then
   backup="${BACKUP_ROOT}/${PRESET_ID}.bak.${STAMP}"
   cp -r "$TARGET_DIR" "$backup"
   say "已备份旧版本 -> ${backup}"
-else
-  # A first install has no old copy to compare against, but DSH has never
-  # imported these modules either, so a fresh mount loads them normally.
-  CODE_CHANGED=0
 fi
 
 rm -rf "$TARGET_DIR"
@@ -161,15 +241,27 @@ cp -r "${SOURCE_DIR}/." "$TARGET_DIR/"
 # lifetime of the process. See the header comment.
 touch "${TARGET_DIR}/agent.cordis.yml"
 
+# ── record what was installed ───────────────────────────────────────────────
+COMMIT="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+cat > "$INSTALLED_FILE" <<EOF
+{
+  "preset": "${PRESET_ID}",
+  "version": "${PACKAGE_VERSION}",
+  "commit": "${COMMIT}",
+  "installedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "installedBy": "$(id -un 2>/dev/null || echo unknown)",
+  "dshHome": "${DSH_HOME_DIR}"
+}
+EOF
+
 # ── verify what landed ──────────────────────────────────────────────────────
-for required in agent.cordis.yml preset.yml paper-policy.mjs paper-refs.mjs paper-commands.mjs; do
+for required in agent.cordis.yml preset.yml paper-policy.mjs paper-refs.mjs paper-commands.mjs INSTALLED.json; do
   [ -f "${TARGET_DIR}/${required}" ] || die "安装后缺少 ${required}"
 done
 [ -d "${TARGET_DIR}/skills" ] || die "安装后缺少 skills/ 目录"
 
 say ""
-say "完成。安装内容:"
-( cd "$TARGET_DIR" && find . -type f | sort | sed 's/^/  /' )
+say "完成。v${PACKAGE_VERSION} 已安装到 ${TARGET_DIR}"
 say ""
 if [ "$CODE_CHANGED" = 1 ]; then
   say "⚠️  本次更新改动了 .mjs 插件代码。"
@@ -181,4 +273,5 @@ else
   say "本次未改动 .mjs 插件代码，新开一个会话即可生效（已挂载的旧会话保持原样）。"
 fi
 say ""
-say "装完若新会话报 preset 挂载失败: ./sync.sh --rollback"
+say "查当前版本: ./sync.sh --status"
+say "出问题回滚: ./sync.sh --rollback"

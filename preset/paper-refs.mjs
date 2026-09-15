@@ -51,6 +51,29 @@ const CONTACT_EMAIL = 'noreply@example.com'
 /** The user-agent every request carries. */
 const USER_AGENT = `dsh-paper-preset/0.1 (mailto:${CONTACT_EMAIL})`
 
+/**
+ * The installed preset version, read from `INSTALLED.json` beside this file.
+ *
+ * Read at CALL time and never hard-coded, so shipping a new version is a
+ * metadata change rather than a code change. That matters more than it looks:
+ * DSH loads these modules through a plain `import()` and Node caches them for
+ * the life of the process, so ANY edit here costs every deployment a restart.
+ * Keeping the version out of the code means version bumps land on the next
+ * session while only real logic changes require a restart.
+ */
+function installedVersion() {
+  try {
+    const fs = process.getBuiltinModule('node:fs')
+    const path = process.getBuiltinModule('node:path')
+    const url = process.getBuiltinModule('node:url')
+    const file = path.join(path.dirname(url.fileURLToPath(import.meta.url)), 'INSTALLED.json')
+    const match = fs.readFileSync(file, 'utf8').match(/"version"\s*:\s*"([^"]+)"/)
+    return match === null ? 'unknown' : match[1]
+  } catch {
+    return 'unknown'
+  }
+}
+
 /** Minimal JSON schema compiler for tool parameters (zero dependencies). */
 function toJsonSchema(spec) {
   const properties = {}
@@ -799,7 +822,9 @@ async function runBibCheck(args, exec) {
 
   const header = '| key | status | source | issue |\n|---|---|---|---|'
   const summary = Object.entries(counts).map(([status, count]) => `${status}=${count}`).join(', ')
-  const lines = [`bib_check: ${batch.length} entr${batch.length === 1 ? 'y' : 'ies'} in ${bibPath}`, summary, '', header, ...rows]
+  const version = installedVersion()
+  const label = version === 'unknown' ? 'unversioned' : `v${version}`
+  const lines = [`bib_check (paper preset ${label}): ${batch.length} entr${batch.length === 1 ? 'y' : 'ies'} in ${bibPath}`, summary, '', header, ...rows]
 
   if (used) {
     const defined = new Set(parseBibEntries(fs.readFileSync(bibPath, 'utf8')).map((entry) => entry.key))
