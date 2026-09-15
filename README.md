@@ -89,7 +89,55 @@ DSH_HOME=/home/dsh/.dsh ./sync.sh
 
 ---
 
-## 二、给维护者：改完这么发布
+## 二、这个 bundle 和客户 DSH 的关系（兼容性）
+
+**GitHub 上的不是 DSH，只是一个 preset。** 它寄生在客户已经装好的 DSH 上，`agent.cordis.yml` 里点名了 **24 个 `@deepseek-ai/dsh-*` 包**。任何一个解析不到，挂载就失败。
+
+### 耦合在四处
+
+| 耦合点 | 出问题时的表现 |
+|---|---|
+| 包的**名字** | 行无法解析 → `row "x" names a plugin that cannot be resolved` |
+| 包的 **config schema** | 行加载失败 → `invalid config: $.<field> missing required value` |
+| 行 `inject` 的 **service** | 行不激活 → `N row(s) did not activate: ... waiting for <service>` |
+| **Node 版本** | 插件用到 `process.getBuiltinModule`，需要 Node ≥ 22 |
+
+### 失败长什么样（爆炸半径）
+
+- preset 是**惰性挂载**的：装坏了**不会拖垮 DSH 本身**，其他 preset 的会话照常
+- **但选了「论文模式」的会话打不开**
+- ⚠️ **如果它被设成了默认 preset**（settings 里 `agent-presets.default: paper`），那就等于**全员打不开** —— 所以**验证通过之前不要设成默认**
+
+### 三道防线
+
+**1. `COMPATIBILITY.json`** —— 记录这个 bundle 是在哪个 DSH 上验证的：DSH 版本、Node 下限、以及 24 个包的精确版本。
+
+**2. `sync.sh` 安装前预检** —— 在客户机上逐包比对：
+
+| 情况 | 行为 |
+|---|---|
+| 某个包**找不到** | ❌ 报错退出（挂载必然失败）；`--force` 可强行继续 |
+| DSH 版本与验证环境不同 | ⚠️ 警告 |
+| 包版本与验证环境不同 | ⚠️ 警告并列出差异 |
+| Node 低于下限 | ❌ 报错退出 |
+
+**3. 备份 + `--rollback`** —— 每次安装前自动备份上一版，一条命令回退。
+
+### 预检查不到的部分（只能靠真实会话）
+
+- 包**版本没变但内部 config schema 变了**
+- preset 的行要 `inject` 某个 host service，而这个部署**根本没挂**那个服务
+- 所以：**装完必须开一个会话确认一次** —— 「论文模式」能选、能开、工具在。
+
+### 维护者：换验证环境后重新生成
+
+```bash
+./tools/gen-compatibility.sh     # 在验证过的机器上跑，然后提交 COMPATIBILITY.json
+```
+
+---
+
+## 三、给维护者：改完这么发布
 
 ```bash
 # 1. 改 preset/ 下的文件
@@ -113,7 +161,7 @@ git add -A && git commit -m "paper preset 0.2.0" && git tag paper-v0.2.0 && git 
 
 ---
 
-## 三、更新是怎么生效的（实测结论）
+## 四、更新是怎么生效的（实测结论）
 
 下面每一条都在真实运行的 DSH 上量过，不是推测。
 
@@ -175,7 +223,7 @@ preset 里的 `.mjs` 是**真实代码**，跑在 DSH 主进程里，权限等�
 
 ---
 
-## 四、依赖与合规
+## 五、依赖与合规
 
 - **外部 API**：OpenAlex（主检索）、Crossref（DOI）、DataCite（arXiv 的 `10.48550/*` DOI 只在 DataCite）。三者免费、无 key。**无 SLA**——上游挂了或改了，这个功能就会降级；工具会明确报 `service_error` 而不是假装通过。
 - **中文文献**：知网没有开放 API，核验不了。工具会把这类条目标成查不到，需要人工判断，**这是限制不是 bug**。
@@ -184,13 +232,16 @@ preset 里的 `.mjs` 是**真实代码**，跑在 DSH 主进程里，权限等�
 
 ---
 
-## 五、目录
+## 六、目录
 
 ```
 .
 ├── VERSION            版本号
 ├── checksums.txt      preset/ 下每个文件的 sha256
-├── sync.sh            安装 / 更新 / 回滚
+├── COMPATIBILITY.json 本 bundle 验证过的 DSH / Node / 24 个宿主包版本
+├── sync.sh            安装 / 更新 / 回滚 / 兼容性预检
+├── tools/
+│   └── gen-compatibility.sh   重新生成 COMPATIBILITY.json
 ├── README.md
 └── preset/            整个 preset（原样复制到 ~/.dsh/.agent-presets/paper/）
     ├── agent.cordis.yml

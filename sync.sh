@@ -97,6 +97,99 @@ version_ge() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | tail -n1)" = "$1" ]
 }
 
+# ── host compatibility preflight ────────────────────────────────────────────
+# A preset bundle is NOT a DSH. Its composition names host packages, and every
+# one of them must resolve on the customer's install or the mount fails and
+# sessions on this preset refuse to start. COMPATIBILITY.json records the exact
+# install this bundle was validated against; this compares the two.
+#
+# What it CAN catch: a renamed or missing package, a DSH carrying a different
+# package set, too-old Node.
+# What it CANNOT catch: a config-schema change inside a package that kept its
+# version, or a host service the preset's rows inject that this deployment does
+# not mount. Only a real mount catches those — which is why the operator must
+# open a session after installing, and why --rollback exists.
+compat_preflight() {
+  local file="${SCRIPT_DIR}/COMPATIBILITY.json"
+  if [ ! -f "$file" ]; then
+    say "警告: 缺少 COMPATIBILITY.json，跳过宿主兼容性预检。"
+    return 0
+  fi
+
+  local node_min node_now
+  node_min="$(sed -n 's/.*"nodeMinimum"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n1)"
+  node_now="$(node --version 2>/dev/null | sed 's/^v//')"
+  if [ -n "$node_now" ] && [ -n "$node_min" ] && ! version_ge "$node_now" "$node_min"; then
+    die "Node 版本过低: 当前 v${node_now}，这个 preset 需要 >= v${node_min}（插件用到 process.getBuiltinModule）。"
+  fi
+
+  local dsh_bin
+  dsh_bin="$(command -v dsh || true)"
+  if [ -z "$dsh_bin" ]; then
+    say "警告: PATH 里找不到 dsh，无法预检宿主兼容性（请用运行 DSH 的那个用户执行）。"
+    return 0
+  fi
+
+  local entry install_root pkg_root
+  entry="$(readlink -f "$dsh_bin" 2>/dev/null || echo "$dsh_bin")"
+  install_root="$(cd -- "$(dirname -- "$entry")/.." 2>/dev/null && pwd || echo '')"
+  pkg_root="$(cd -- "${install_root}/.." 2>/dev/null && pwd || echo '')"
+
+  local declared_dsh dsh_now
+  declared_dsh="$(sed -n 's/.*"dshVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n1)"
+  dsh_now="$(dsh --version 2>/dev/null | tr -d '[:space:]' || echo '')"
+
+  if [ -z "$install_root" ] || [ ! -d "${install_root}/node_modules/@deepseek-ai" ]; then
+    say "警告: 认不出 DSH 的安装目录，跳过包检查。"
+    return 0
+  fi
+
+  local missing='' mismatched='' checked=0 pair pkg want name have candidate
+  while IFS= read -r pair; do
+    [ -n "$pair" ] || continue
+    pkg="${pair%%: *}"
+    want="${pair##*: }"
+    name="${pkg##*/}"
+    have=''
+    for candidate in "${install_root}/node_modules/@deepseek-ai/${name}" "${pkg_root}/${name}"; do
+      if [ -f "${candidate}/package.json" ]; then
+        have="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${candidate}/package.json" | head -n1)"
+        break
+      fi
+    done
+    checked=$((checked + 1))
+    if [ -z "$have" ]; then
+      missing="${missing}${missing:+, }${pkg}"
+    elif [ "$want" != "unknown" ] && [ "$have" != "$want" ]; then
+      mismatched="${mismatched}${mismatched:+, }${pkg} (验证于 ${want}，此处 ${have})"
+    fi
+  done < <(sed -n '/"packages"[[:space:]]*:[[:space:]]*{/,/^  }/p' "$file" \
+    | grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*"[^"]+"' | sed 's/"//g')
+
+  say "宿主兼容性预检: 检查了 ${checked} 个包"
+
+  if [ -n "$missing" ]; then
+    if [ "$FORCE" = 1 ]; then
+      say "⚠️  以下包在该 DSH 上找不到，--force 已指定，继续（挂载很可能失败）:"
+      say "      ${missing}"
+    else
+      die "以下包在该 DSH 上找不到，preset 挂载必然失败:
+     ${missing}
+     DSH 版本: ${dsh_now:-未知}（本 bundle 验证于 ${declared_dsh}）
+     这台机器的 DSH 与本 preset 不兼容 —— 请不要安装，或升级 DSH 后再试。
+     确实要强行安装: ./sync.sh --force"
+    fi
+  fi
+
+  if [ -n "$dsh_now" ] && [ -n "$declared_dsh" ] && [ "$dsh_now" != "$declared_dsh" ]; then
+    say "⚠️  DSH 版本不同: 此处 ${dsh_now}，本 bundle 验证于 ${declared_dsh}"
+  fi
+  if [ -n "$mismatched" ]; then
+    say "⚠️  以下包版本与验证环境不同（通常无害，但配置项可能已变）:"
+    say "      ${mismatched}"
+  fi
+}
+
 PACKAGE_VERSION="$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo '')"
 
 # ── status path (read-only) ─────────────────────────────────────────────────
@@ -163,6 +256,10 @@ fi
 
 say "分发包版本: ${PACKAGE_VERSION}"
 say "DSH 主目录: ${DSH_HOME_DIR}"
+say ""
+
+# ── host compatibility: does this DSH actually carry what the preset names? ──
+compat_preflight
 say ""
 
 # ── integrity: verify every file against the shipped checksums ──────────────

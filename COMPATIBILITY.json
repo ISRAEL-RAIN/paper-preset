@@ -1,0 +1,32 @@
+{
+  "validatedOn": "2026-09-15T06:18:07Z",
+  "dshVersion": "0.1.5-rc.1",
+  "nodeVersion": "v24.15.0",
+  "nodeMinimum": "22.0.0",
+  "packages": {
+    "@deepseek-ai/dsh-agent-instructions": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-command-compact": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-command-goal": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-persona": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-plan-mode": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-bash": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-fs": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-fs-search": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-goal": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-jobs": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-present": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-pwsh": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-ralph": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-skill": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-subagent": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-subagent-control": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-todo": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-web": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-workflow": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-workflow-worker-thread": "0.1.5-rc.2"
+  }
+}
