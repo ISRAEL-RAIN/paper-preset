@@ -1,0 +1,8 @@
+168ca7f2e6c775fd90f9b1e1815bff6f6ad37d32fa3a24f5060a9c29936c11f2  ./agent.cordis.yml
+d6aaf53b07aeee33911e737a93a272f40a498398801ce3e59094e214ab7a8d53  ./paper-commands.mjs
+2744b0c83ab196f23ecf7e29430a76f30d95ef64e101210a7cfe59f4e2430de1  ./paper-policy.mjs
+8426a8e63ea03b005a3a061d281706c8ca79015929bb337d1b4035411d978adc  ./paper-refs.mjs
+c3951fd81e0a6abfb94a0ee7257f268be2d56021908ec8a658282d8c35abc238  ./preset.yml
+43e0875e7b66ecad9fd8b6b1ada7cf7d6bf25215b08360cb7736c960f26c7f14  ./skills/chinese-academic/SKILL.md
+f73146d9ae469528412325dfc2ff9519be0274896f0e42d4eeb4498f5237c33e  ./skills/citation-integrity/SKILL.md
+a1944612fce0411bbb7312b9cd5c32eeb931845a0ef15985c46e5b5089461cbf  ./skills/paper-writing-craft/SKILL.md
